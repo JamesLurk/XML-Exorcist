@@ -1,0 +1,97 @@
+# === CONFIGURATION ===
+$logFile = "scan_results.log"  # Output log file
+
+# Start fresh: clear previous log
+"" | Out-File -Encoding UTF8 $logFile
+
+# Initialize hidKey map dictionary
+$hidKeyMap = @{}
+
+# Utility function: log with timestamp and optional color
+function Log {
+    param (
+        [string]$message,
+        [ConsoleColor]$color = "White"
+    )
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $final = "[$timestamp] $message"
+
+    # Log to file
+    $final | Out-File -Append -Encoding UTF8 -FilePath $logFile
+
+    # Log to console with color
+    Write-Host $final -ForegroundColor $color
+}
+
+# Start message
+Log "XML Exorcist by JamesLurk" Yellow
+
+# === MAIN PROCESSING ===
+
+Log "🔎 Starting XML scan..." Cyan
+
+Get-ChildItem -Filter *.xml -Recurse | ForEach-Object {
+    $file = $_.FullName
+    $expectedName = $_.BaseName
+
+    try {
+        $content = Get-Content -Raw -Path $file -ErrorAction Stop
+        [xml]$xml = $content
+
+        Log "✔ OK XML: $($_.Name)" Green
+
+        # Check for text_hidName mismatch
+        $nameNode = $xml.SelectSingleNode("//field[@name='text_hidName']")
+        if ($nameNode -ne $null) {
+            $actualName = $nameNode.InnerText.Trim()
+
+            if ($expectedName -ne $actualName) {
+                Log "❌ Name mismatch in: $($_.Name)" Red
+                Log "    Expected : '$expectedName'" Yellow
+                Log "    Found    : '$actualName'" Cyan
+
+                if ($nameNode.InnerText -match '^\s+|\s+$') {
+                    Log "    ⚠️ Name contains leading/trailing whitespace." Magenta
+                }
+            }
+        }
+
+        # Track hidKey usage
+        $keyNode = $xml.SelectSingleNode("//field[@name='hidKey']")
+        if ($keyNode -ne $null) {
+            $hidKey = $keyNode.InnerText.Trim()
+
+            if ($hidKeyMap.ContainsKey($hidKey)) {
+                $hidKeyMap[$hidKey] += ,$_.FullName
+            } else {
+                $hidKeyMap[$hidKey] = @($_.FullName)
+            }
+        }
+
+    } catch [System.Xml.XmlException] {
+        Log "🛑 XML ERROR in file: $($_.Name)" Red
+        Log "Message: $($_.Exception.Message)" Yellow
+        Log "Line: $($_.Exception.LineNumber), Column: $($_.Exception.LinePosition)" Cyan
+    } catch {
+        Log "⚠️ Other error in $($_.Name): $($_.Exception.Message)" Magenta
+    }
+}
+
+# === POST PROCESSING ===
+
+Log "`n🔍 Checking for duplicate hidKeys..." Cyan
+
+$duplicateKeys = $hidKeyMap.GetEnumerator() | Where-Object { $_.Value.Count -gt 1 }
+
+foreach ($entry in $duplicateKeys) {
+    Log "`n❗ DUPLICATE hidKey: $($entry.Key)" Red
+    foreach ($path in $entry.Value) {
+        Log "   ↳ $path" Yellow
+    }
+}
+
+if ($duplicateKeys.Count -eq 0) {
+    Log "`n✅ No duplicate hidKeys found." Green
+}
+
+Log "`n🟢 XML scan completed." Cyan
